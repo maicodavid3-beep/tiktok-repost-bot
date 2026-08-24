@@ -1,0 +1,64 @@
+name: Publicar videos (YouTube + Instagram)
+
+on:
+  # 4 horarios por día, hora Argentina (UTC-3):
+  #   10:00 / 13:00 / 17:00 / 20:00  ->  13:00 / 16:00 / 20:00 / 23:00 UTC (Fase 1)
+  #   10:30 / 13:30 / 17:30 / 20:30  ->  13:30 / 16:30 / 20:30 / 23:30 UTC (Fase 2, 30 min después)
+  schedule:
+    - cron: "0 13,16,20,23 * * *"    # Fase 1: sube a YouTube + publica Trial Reel
+    - cron: "30 13,16,20,23 * * *"   # Fase 2: publica el Reel normal (mismo video)
+  # Para probar manualmente desde la pestaña "Actions" de GitHub sin esperar al cron
+  workflow_dispatch:
+    inputs:
+      fase:
+        description: "fase1 o fase2"
+        required: true
+        default: "fase1"
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Determinar fase
+        id: fase
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "fase=${{ github.event.inputs.fase }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 13,16,20,23 * * *" ]; then
+            echo "fase=fase1" >> "$GITHUB_OUTPUT"
+          else
+            echo "fase=fase2" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ejecutar orquestador
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_BRANCH: main
+        run: python scripts/orchestrator.py ${{ steps.fase.outputs.fase }}
+
+      - name: Guardar estado actualizado (queue.json / pending_normal.json)
+        run: |
+          git config user.name "repost-bot"
+          git config user.email "repost-bot@users.noreply.github.com"
+          git add config/queue.json state/pending_normal.json
+          git diff --cached --quiet || git commit -m "Actualiza estado [skip ci]"
+          git push

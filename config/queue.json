@@ -1,0 +1,11 @@
+[
+  {
+    "id": "video-001",
+    "file": "videos/video-001.mp4",
+    "caption": "Reemplazá esto con la MISMA descripción que usaste en TikTok para este video.",
+    "status": "pending",
+    "youtube_video_id": null,
+    "ig_trial_media_id": null,
+    "ig_normal_media_id": null
+  }
+]

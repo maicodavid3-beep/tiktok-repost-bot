@@ -55,9 +55,12 @@ def _save_json(path: Path, data) -> None:
 def fase1() -> None:
     queue = _load_json(QUEUE_PATH)
 
-    siguiente = next((v for v in queue if v["status"] == "pending"), None)
+    siguiente = next(
+        (v for v in queue if v["status"] == "pending" and (ROOT / v["file"]).exists()),
+        None,
+    )
     if siguiente is None:
-        print("No hay videos pendientes en la cola. Nada que hacer.")
+        print("No hay videos pendientes en la cola (o están pending pero el archivo todavía no fue subido). Nada que hacer.")
         return
 
     video_url = _video_public_url(siguiente["file"])

@@ -18,6 +18,14 @@ on:
 permissions:
   contents: write
 
+# Evita que dos corridas se ejecuten al mismo tiempo (por ejemplo si el cron
+# nativo de GitHub y el respaldo externo de cron-job.org disparan casi juntos).
+# Si una ya está corriendo, la siguiente espera en cola en vez de correr en
+# paralelo — así nunca se procesa el mismo video "pending" dos veces.
+concurrency:
+  group: publicar-videos
+  cancel-in-progress: false
+
 jobs:
   publicar:
     runs-on: ubuntu-latest

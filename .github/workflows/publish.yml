@@ -67,6 +67,6 @@ jobs:
         run: |
           git config user.name "repost-bot"
           git config user.email "repost-bot@users.noreply.github.com"
-          git add config/queue.json state/pending_normal.json
+          git add config/queue.json state/pending_normal.json state/last_run.json
           git diff --cached --quiet || git commit -m "Actualiza estado [skip ci]"
           git push

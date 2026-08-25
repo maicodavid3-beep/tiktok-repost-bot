@@ -3,9 +3,9 @@
     "id": "video-001",
     "file": "videos/video-001.mp4",
     "caption": "Este año la chica de los alineadores se va un mes a Japón pero no me gusta el sushi #alineadores #comida #japon #ortodoncia #review",
-    "status": "pending",
-    "youtube_video_id": null,
-    "ig_trial_media_id": null,
+    "status": "trial_posted",
+    "youtube_video_id": "XlwOf9LdqSU",
+    "ig_trial_media_id": "17880505716512561",
     "ig_normal_media_id": null
   }
 ]

@@ -44,15 +44,15 @@
     "ig_trial_media_id": "18115217432060970",
     "ig_normal_media_id": "18053003018568584"
   },
- {
-  "id": "video-006",
-  "file": "videos/video-006.mp4",
-  "caption": "Mi rutina de limpieza de alineadores diaria porque me la pidieron muchísimo #alineadores #alineadoresinvisibles #ortodoncia #ortodonciainvisible #review",
-  "status": "pending",
-  "youtube_video_id": null,
-  "ig_trial_media_id": null,
-  "ig_normal_media_id": null
-},
+  {
+    "id": "video-006",
+    "file": "videos/video-006.mp4",
+    "caption": "Mi rutina de limpieza de alineadores diaria porque me la pidieron muchísimo #alineadores #alineadoresinvisibles #ortodoncia #ortodonciainvisible #review",
+    "status": "trial_posted",
+    "youtube_video_id": "6cx6bFnYdG0",
+    "ig_trial_media_id": "17968202709006599",
+    "ig_normal_media_id": null
+  },
   {
     "id": "video-007",
     "file": "videos/video-007.mp4",

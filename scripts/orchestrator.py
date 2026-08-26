@@ -37,6 +37,7 @@ horario, no un horario nuevo).
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +50,10 @@ ROOT = Path(__file__).parent.parent
 QUEUE_PATH = ROOT / "config" / "queue.json"
 PENDING_PATH = ROOT / "state" / "pending_normal.json"
 LAST_RUN_PATH = ROOT / "state" / "last_run.json"
+
+# Si en una misma corrida de Fase 2 hay que publicar más de un video
+# acumulado, esperamos esto entre uno y otro para que no salgan pegados.
+BACKLOG_GAP_SECONDS = 15 * 60
 
 # Ventana de "esto es probablemente un disparo duplicado del mismo horario".
 # Los horarios reales de una misma fase están separados por ~3 horas, así que
@@ -184,11 +189,17 @@ def fase2() -> None:
 
     # Procesamos TODOS los que estén esperando (no solo el primero), para que
     # la lista quede vacía al final y no se arrastre un atraso permanente.
-    for pending in pendientes:
+    # Si hay más de uno, los espaciamos un poco entre sí (no publicamos dos
+    # reels normales pegados en el mismo momento).
+    for idx, pending in enumerate(pendientes):
         item = next((v for v in queue if v["id"] == pending["id"]), None)
         if item is None:
             print(f"Aviso: no se encontró en la cola el video {pending['id']}. Lo descarto de la lista de espera.")
             continue
+
+        if idx > 0:
+            print(f"Esperando {BACKLOG_GAP_SECONDS // 60} min antes de publicar el siguiente del backlog...")
+            time.sleep(BACKLOG_GAP_SECONDS)
 
         ig_normal_id = publish_reel(video_url=pending["video_url"], caption=pending["caption"], trial=False)
 

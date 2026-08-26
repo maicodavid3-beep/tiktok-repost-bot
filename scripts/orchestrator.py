@@ -50,7 +50,7 @@ LAST_RUN_PATH = ROOT / "state" / "last_run.json"
 # Los horarios reales de una misma fase están separados por ~3 horas, así que
 # cualquier valor bien por debajo de eso (pero por encima del atraso típico
 # que puede tener el cron nativo de GitHub) es seguro.
-RECENT_RUN_MINUTES = 45
+RECENT_RUN_MINUTES = 110
 
 
 def _video_public_url(file_relative_path: str) -> str:

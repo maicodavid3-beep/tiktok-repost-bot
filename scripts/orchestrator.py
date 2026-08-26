@@ -6,11 +6,15 @@ FASE 1 (fase1): agarra el próximo video "pending" de config/queue.json,
   state/pending_normal.json (una lista) los datos necesarios para su
   Fase 2 futura.
 
-FASE 2 (fase2): lee state/pending_normal.json y publica el Reel normal del
-  video MÁS ANTIGUO en espera (el primero de la lista), como post
-  independiente del trial (no lo modifica ni lo reemplaza). Si hay más de
-  uno esperando (por ejemplo porque se saltearon corridas), los va
-  procesando de a uno por corrida, en orden.
+FASE 2 (fase2): lee state/pending_normal.json y publica el Reel normal de
+  TODOS los videos que estén esperando (en orden, el más antiguo primero),
+  como posts independientes del trial (no los modifica ni los reemplaza).
+  Normalmente va a haber uno solo esperando, pero si se acumuló más de uno
+  (por ejemplo porque una corrida anterior se saltó), los publica todos en
+  la misma corrida en vez de ir de a uno — así la lista de espera queda
+  vacía después de cada Fase 2, y el próximo video vuelve a tener su Reel
+  normal ~30 minutos después de su Trial, en vez de quedar arrastrando un
+  atraso permanente.
 
 Se ejecuta desde GitHub Actions, que llama:
     python scripts/orchestrator.py fase1
@@ -175,30 +179,31 @@ def fase2() -> None:
         print("No hay ningún reel esperando su publicación normal. Nada que hacer.")
         return
 
-    pending = pendientes[0]
-
     queue = _load_json(QUEUE_PATH)
-    item = next((v for v in queue if v["id"] == pending["id"]), None)
-    if item is None:
-        print(f"Aviso: no se encontró en la cola el video {pending['id']}. Lo descarto de la lista de espera.")
-        _save_json(PENDING_PATH, pendientes[1:])
-        return
+    publicados = []
 
-    ig_normal_id = publish_reel(video_url=pending["video_url"], caption=pending["caption"], trial=False)
+    # Procesamos TODOS los que estén esperando (no solo el primero), para que
+    # la lista quede vacía al final y no se arrastre un atraso permanente.
+    for pending in pendientes:
+        item = next((v for v in queue if v["id"] == pending["id"]), None)
+        if item is None:
+            print(f"Aviso: no se encontró en la cola el video {pending['id']}. Lo descarto de la lista de espera.")
+            continue
 
-    item["status"] = "done"
-    item["ig_normal_media_id"] = ig_normal_id
+        ig_normal_id = publish_reel(video_url=pending["video_url"], caption=pending["caption"], trial=False)
+
+        item["status"] = "done"
+        item["ig_normal_media_id"] = ig_normal_id
+        publicados.append(pending["id"])
+        print(f"Fase 2 completa para {pending['id']}: reel normal publicado.")
+
     _save_json(QUEUE_PATH, queue)
-
-    pendientes = pendientes[1:]
-    _save_json(PENDING_PATH, pendientes)
+    _save_json(PENDING_PATH, [])
 
     _mark_ran("fase2")
 
-    print(f"Fase 2 completa para {pending['id']}: reel normal publicado.")
-    if pendientes:
-        restantes = ", ".join(p["id"] for p in pendientes)
-        print(f"Nota: todavía quedan {len(pendientes)} video(s) esperando su Fase 2, se van a procesar de a uno en las próximas corridas: {restantes}")
+    if len(publicados) > 1:
+        print(f"Nota: había {len(publicados)} video(s) acumulados esperando su Fase 2, se publicaron todos en esta corrida: {', '.join(publicados)}")
 
 
 if __name__ == "__main__":

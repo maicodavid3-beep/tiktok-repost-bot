@@ -1,19 +1,22 @@
 name: Publicar videos (YouTube + Instagram)
 
 on:
-  # 4 horarios por día, hora Argentina (UTC-3):
-  #   10:00 / 13:00 / 17:00 / 20:00  ->  13:00 / 16:00 / 20:00 / 23:00 UTC (Fase 1)
-  #   10:30 / 13:30 / 17:30 / 20:30  ->  13:30 / 16:30 / 20:30 / 23:30 UTC (Fase 2, 30 min después)
+  # 4 horarios por día, hora Argentina (UTC-3): 10:00 / 13:00 / 17:00 / 20:00
+  # -> 13:00 / 16:00 / 20:00 / 23:00 UTC. En cada uno de estos horarios se
+  # corre el "ciclo" completo: primero publica el Reel normal de cualquier
+  # video que ya haya cumplido sus 24hs desde su Trial Reel, y después sube
+  # un Trial Reel nuevo del próximo video de la cola.
   schedule:
-    - cron: "0 13,16,20,23 * * *"    # Fase 1: sube a YouTube + publica Trial Reel
-    - cron: "30 13,16,20,23 * * *"   # Fase 2: publica el Reel normal (mismo video)
-  # Para probar manualmente desde la pestaña "Actions" de GitHub sin esperar al cron
+    - cron: "0 13,16,20,23 * * *"
+  # Para probar manualmente desde la pestaña "Actions" de GitHub sin esperar
+  # al horario. "ciclo" es el modo normal; fase1/fase2 son solo para forzar
+  # una fase puntual durante una prueba.
   workflow_dispatch:
     inputs:
       fase:
-        description: "fase1 o fase2"
+        description: "ciclo (normal) / fase1 o fase2 (forzado, solo para pruebas)"
         required: true
-        default: "fase1"
+        default: "ciclo"
 
 permissions:
   contents: write
@@ -46,10 +49,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "fase=${{ github.event.inputs.fase }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 13,16,20,23 * * *" ]; then
-            echo "fase=fase1" >> "$GITHUB_OUTPUT"
           else
-            echo "fase=fase2" >> "$GITHUB_OUTPUT"
+            echo "fase=ciclo" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Ejecutar orquestador

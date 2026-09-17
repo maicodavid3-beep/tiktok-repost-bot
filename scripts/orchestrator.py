@@ -1,37 +1,39 @@
 """
-Orquestador de las dos fases del posteo.
+Orquestador del posteo con demora de 24 horas entre el Trial Reel y el Reel
+normal (antes eran 30 minutos).
 
-FASE 1 (fase1): agarra el próximo video "pending" de config/queue.json,
-  lo sube a YouTube, publica el Trial Reel en Instagram, y AGREGA a
-  state/pending_normal.json (una lista) los datos necesarios para su
-  Fase 2 futura.
+Cada corrida programada ejecuta un "ciclo" completo que hace dos cosas, en
+este orden:
 
-FASE 2 (fase2): lee state/pending_normal.json y publica el Reel normal de
-  TODOS los videos que estén esperando (en orden, el más antiguo primero),
-  como posts independientes del trial (no los modifica ni los reemplaza).
-  Normalmente va a haber uno solo esperando, pero si se acumuló más de uno
-  (por ejemplo porque una corrida anterior se saltó), los publica todos en
-  la misma corrida en vez de ir de a uno — así la lista de espera queda
-  vacía después de cada Fase 2, y el próximo video vuelve a tener su Reel
-  normal ~30 minutos después de su Trial, en vez de quedar arrastrando un
-  atraso permanente.
+1. Revisa state/pending_normal.json (videos que ya tienen su Trial Reel
+   publicado) y, de los que ya cumplieron sus 24 horas de espera, publica el
+   Reel normal correspondiente (Fase 2). Los que todavía no cumplieron las
+   24 horas se dejan esperando para la próxima corrida (no se tocan).
+2. Toma el próximo video "pending" de config/queue.json (con su archivo ya
+   subido), lo sube a YouTube y publica su Trial Reel en Instagram (Fase 1),
+   guardando en state/pending_normal.json la marca de tiempo exacta en que
+   se publicó el trial, para poder calcular después cuándo le toca su
+   Fase 2 (24hs más tarde).
 
-Se ejecuta desde GitHub Actions, que llama:
-    python scripts/orchestrator.py fase1
-    python scripts/orchestrator.py fase2
+Se ejecuta desde GitHub Actions, que llama normalmente:
+    python scripts/orchestrator.py ciclo
 
-El propio workflow decide qué fase correr según el cron que disparó
-la corrida (ver .github/workflows/publish.yml).
+También se pueden forzar las fases por separado para pruebas manuales
+(workflow_dispatch), aunque el uso normal en el horario programado es
+siempre "ciclo":
+    python scripts/orchestrator.py fase1   # fuerza solo un trial nuevo
+    python scripts/orchestrator.py fase2   # fuerza la publicación de TODOS
+                                            # los que estén esperando, SIN
+                                            # esperar las 24hs (útil para
+                                            # probar manualmente)
 
 PROTECCIÓN CONTRA DISPAROS DUPLICADOS: como hay dos disparadores en paralelo
 (el cron nativo de GitHub Actions + el respaldo externo de cron-job.org),
-puede pasar que los dos disparen casi al mismo horario para la MISMA fase
-(por ejemplo si GitHub se atrasa unos minutos y coincide con cron-job.org).
-Para que eso no haga que se procesen dos videos en el mismo horario en vez
-de uno, cada fase registra en state/last_run.json cuándo corrió por última
-vez, y si la misma fase ya corrió hace menos de RECENT_RUN_MINUTES minutos,
-la corrida nueva no hace nada (asume que es un disparo duplicado del mismo
-horario, no un horario nuevo).
+puede pasar que los dos disparen casi al mismo horario. Para que eso no
+duplique el procesamiento, cada modo registra en state/last_run.json cuándo
+corrió por última vez, y si ya corrió hace menos de RECENT_RUN_MINUTES
+minutos, la corrida nueva no hace nada (asume que es un disparo duplicado
+del mismo horario, no un horario nuevo).
 """
 
 import json
@@ -51,14 +53,22 @@ QUEUE_PATH = ROOT / "config" / "queue.json"
 PENDING_PATH = ROOT / "state" / "pending_normal.json"
 LAST_RUN_PATH = ROOT / "state" / "last_run.json"
 
-# Si en una misma corrida de Fase 2 hay que publicar más de un video
-# acumulado, esperamos esto entre uno y otro para que no salgan pegados.
+# Cuánto tiempo tiene que pasar desde el Trial Reel para publicar el Reel
+# normal del mismo video. Antes era 30 minutos, ahora 24 horas.
+NORMAL_DELAY = timedelta(hours=24)
+
+# Margen de tolerancia para no perderse el horario que le toca a un video
+# por unos minutos de atraso/adelanto del disparador (GitHub Actions es
+# "best effort" y puede atrasarse un poco). Un video se considera "listo"
+# un poco antes de cumplir las 24hs exactas de esta manera.
+NORMAL_DELAY_TOLERANCE = timedelta(minutes=15)
+
+# Si en una misma corrida hay que publicar más de un Reel normal acumulado
+# (por ejemplo tras una corrida perdida), esperamos esto entre uno y otro
+# para que no salgan pegados.
 BACKLOG_GAP_SECONDS = 15 * 60
 
 # Ventana de "esto es probablemente un disparo duplicado del mismo horario".
-# Los horarios reales de una misma fase están separados por ~3 horas, así que
-# cualquier valor bien por debajo de eso (pero por encima del atraso típico
-# que puede tener el cron nativo de GitHub) es seguro.
 RECENT_RUN_MINUTES = 110
 
 
@@ -84,35 +94,54 @@ def _save_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _recently_ran(fase_key: str) -> bool:
-    """True si esta fase ya se ejecutó hace menos de RECENT_RUN_MINUTES."""
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _recently_ran(key: str) -> bool:
+    """True si esta clave (ciclo/fase1/fase2) ya se ejecutó hace menos de
+    RECENT_RUN_MINUTES."""
     data = _load_json(LAST_RUN_PATH, default={}) or {}
-    ts = data.get(fase_key)
+    ts = data.get(key)
     if not ts:
         return False
     try:
         last = datetime.fromisoformat(ts)
     except ValueError:
         return False
-    return (datetime.now(timezone.utc) - last) < timedelta(minutes=RECENT_RUN_MINUTES)
+    return (_now() - last) < timedelta(minutes=RECENT_RUN_MINUTES)
 
 
-def _mark_ran(fase_key: str) -> None:
+def _mark_ran(key: str) -> None:
     data = _load_json(LAST_RUN_PATH, default={}) or {}
-    data[fase_key] = datetime.now(timezone.utc).isoformat()
+    data[key] = _now().isoformat()
     _save_json(LAST_RUN_PATH, data)
 
 
-def fase1() -> None:
-    if _recently_ran("fase1"):
+def _is_due(pending_item: dict, force: bool = False) -> bool:
+    """True si a este video ya le toca su Reel normal."""
+    if force:
+        return True
+    ts = pending_item.get("trial_posted_at")
+    if not ts:
+        # Entrada vieja, de antes de este cambio (guardada sin marca de
+        # tiempo bajo el esquema de 30 minutos). Para no dejarla trabada
+        # para siempre esperando algo que nunca va a poder calcularse, se
+        # considera lista para publicar ahora mismo.
         print(
-            f"Fase 1 ya se ejecutó hace menos de {RECENT_RUN_MINUTES} minutos. "
-            "Esto es probablemente un disparo duplicado del mismo horario "
-            "(cron nativo de GitHub + respaldo de cron-job.org). No hago nada "
-            "para no procesar dos videos en el mismo horario."
+            f"Aviso: {pending_item.get('id')} no tiene 'trial_posted_at' "
+            "guardado (es de antes de este cambio). Se publica ahora en "
+            "vez de esperar 24hs."
         )
-        return
+        return True
+    try:
+        posted_at = datetime.fromisoformat(ts)
+    except ValueError:
+        return True
+    return (_now() - posted_at) >= (NORMAL_DELAY - NORMAL_DELAY_TOLERANCE)
 
+
+def _do_fase1() -> None:
     queue = _load_json(QUEUE_PATH)
 
     siguiente = next(
@@ -120,7 +149,10 @@ def fase1() -> None:
         None,
     )
     if siguiente is None:
-        print("No hay videos pendientes en la cola (o están pending pero el archivo todavía no fue subido). Nada que hacer.")
+        print(
+            "[Fase 1] No hay videos pendientes en la cola (o están pending "
+            "pero el archivo todavía no fue subido). Nada que hacer."
+        )
         return
 
     video_url = _video_public_url(siguiente["file"])
@@ -136,7 +168,7 @@ def fase1() -> None:
     if "#shorts" not in descripcion_youtube.lower():
         descripcion_youtube = f"{descripcion_youtube}\n\n#Shorts".strip()
 
-    print(f"Procesando video {siguiente['id']} ({siguiente['file']})")
+    print(f"[Fase 1] Procesando video {siguiente['id']} ({siguiente['file']})")
 
     youtube_id = upload_video(
         video_path=str(ROOT / siguiente["file"]),
@@ -153,52 +185,57 @@ def fase1() -> None:
 
     # IMPORTANTE: agregamos a la lista (no sobreescribimos), así si alguna
     # vez queda más de un video esperando su Fase 2, no se pierde ninguno.
+    # Guardamos también trial_posted_at para poder calcular cuándo le toca
+    # su Reel normal (24hs después de este momento).
     pendientes = _load_json(PENDING_PATH, default=[]) or []
     pendientes.append(
         {
             "id": siguiente["id"],
             "video_url": video_url,
             "caption": caption,
+            "trial_posted_at": _now().isoformat(),
         }
     )
     _save_json(PENDING_PATH, pendientes)
 
-    _mark_ran("fase1")
+    print(
+        f"[Fase 1] Trial Reel publicado para {siguiente['id']}. "
+        "Su Reel normal va a salir en ~24hs."
+    )
 
-    print(f"Fase 1 lista para {siguiente['id']}. La Fase 2 publicará el reel normal en ~30 min.")
 
-
-def fase2() -> None:
-    if _recently_ran("fase2"):
-        print(
-            f"Fase 2 ya se ejecutó hace menos de {RECENT_RUN_MINUTES} minutos. "
-            "Esto es probablemente un disparo duplicado del mismo horario "
-            "(cron nativo de GitHub + respaldo de cron-job.org). No hago nada "
-            "para no publicar el mismo reel normal dos veces."
-        )
-        return
-
+def _do_fase2(force: bool = False) -> None:
     pendientes = _load_json(PENDING_PATH, default=[]) or []
 
     if not pendientes:
-        print("No hay ningún reel esperando su publicación normal. Nada que hacer.")
+        print("[Fase 2] No hay ningún reel esperando su publicación normal. Nada que hacer.")
+        return
+
+    listos = [p for p in pendientes if _is_due(p, force=force)]
+    no_listos = [p for p in pendientes if not _is_due(p, force=force)]
+
+    if not listos:
+        print(
+            f"[Fase 2] Hay {len(pendientes)} video(s) esperando su turno, "
+            "pero ninguno cumplió todavía sus 24hs. No se publica nada en "
+            "esta corrida."
+        )
         return
 
     queue = _load_json(QUEUE_PATH)
     publicados = []
 
-    # Procesamos TODOS los que estén esperando (no solo el primero), para que
-    # la lista quede vacía al final y no se arrastre un atraso permanente.
-    # Si hay más de uno, los espaciamos un poco entre sí (no publicamos dos
-    # reels normales pegados en el mismo momento).
-    for idx, pending in enumerate(pendientes):
+    # Procesamos TODOS los que ya estén listos (no solo el primero), por si
+    # se acumuló más de uno (por ejemplo tras una corrida perdida). Si hay
+    # más de uno, los espaciamos un poco entre sí.
+    for idx, pending in enumerate(listos):
         item = next((v for v in queue if v["id"] == pending["id"]), None)
         if item is None:
             print(f"Aviso: no se encontró en la cola el video {pending['id']}. Lo descarto de la lista de espera.")
             continue
 
         if idx > 0:
-            print(f"Esperando {BACKLOG_GAP_SECONDS // 60} min antes de publicar el siguiente del backlog...")
+            print(f"[Fase 2] Esperando {BACKLOG_GAP_SECONDS // 60} min antes de publicar el siguiente...")
             time.sleep(BACKLOG_GAP_SECONDS)
 
         ig_normal_id = publish_reel(video_url=pending["video_url"], caption=pending["caption"], trial=False)
@@ -206,23 +243,65 @@ def fase2() -> None:
         item["status"] = "done"
         item["ig_normal_media_id"] = ig_normal_id
         publicados.append(pending["id"])
-        print(f"Fase 2 completa para {pending['id']}: reel normal publicado.")
+        print(f"[Fase 2] Reel normal publicado para {pending['id']}.")
 
     _save_json(QUEUE_PATH, queue)
-    _save_json(PENDING_PATH, [])
-
-    _mark_ran("fase2")
+    # Los que todavía no cumplieron sus 24hs quedan esperando en la lista.
+    _save_json(PENDING_PATH, no_listos)
 
     if len(publicados) > 1:
-        print(f"Nota: había {len(publicados)} video(s) acumulados esperando su Fase 2, se publicaron todos en esta corrida: {', '.join(publicados)}")
+        print(
+            f"Nota: se publicaron {len(publicados)} reels normales en esta "
+            f"corrida: {', '.join(publicados)}"
+        )
+    if no_listos:
+        print(
+            f"Quedan {len(no_listos)} video(s) esperando a cumplir sus 24hs: "
+            f"{', '.join(p['id'] for p in no_listos)}"
+        )
+
+
+def ciclo() -> None:
+    """Modo normal, usado por el horario programado: revisa si hay algún
+    Reel normal que ya cumplió sus 24hs (y lo publica), y después sube el
+    próximo Trial Reel nuevo."""
+    if _recently_ran("ciclo"):
+        print(
+            f"El ciclo ya se ejecutó hace menos de {RECENT_RUN_MINUTES} minutos. "
+            "Esto es probablemente un disparo duplicado del mismo horario "
+            "(cron nativo de GitHub + respaldo de cron-job.org). No hago nada."
+        )
+        return
+
+    _do_fase2(force=False)
+    _do_fase1()
+    _mark_ran("ciclo")
+
+
+def fase1() -> None:
+    """Fuerza SOLO la Fase 1 (subir un trial nuevo). Pensado para pruebas
+    manuales desde 'Run workflow', no para el horario programado."""
+    if _recently_ran("fase1"):
+        print(f"Fase 1 (manual) ya se ejecutó hace menos de {RECENT_RUN_MINUTES} minutos. No hago nada.")
+        return
+    _do_fase1()
+    _mark_ran("fase1")
+
+
+def fase2() -> None:
+    """Fuerza la Fase 2 para TODOS los que estén esperando, sin importar si
+    ya cumplieron las 24hs o no. Pensado para pruebas manuales desde 'Run
+    workflow', no para el horario programado."""
+    if _recently_ran("fase2"):
+        print(f"Fase 2 (manual) ya se ejecutó hace menos de {RECENT_RUN_MINUTES} minutos. No hago nada.")
+        return
+    _do_fase2(force=True)
+    _mark_ran("fase2")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("fase1", "fase2"):
-        print("Uso: python orchestrator.py [fase1|fase2]")
+    if len(sys.argv) != 2 or sys.argv[1] not in ("ciclo", "fase1", "fase2"):
+        print("Uso: python orchestrator.py [ciclo|fase1|fase2]")
         sys.exit(1)
 
-    if sys.argv[1] == "fase1":
-        fase1()
-    else:
-        fase2()
+    {"ciclo": ciclo, "fase1": fase1, "fase2": fase2}[sys.argv[1]]()

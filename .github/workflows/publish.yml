@@ -68,8 +68,13 @@ jobs:
           git config user.email "repost-bot@users.noreply.github.com"
           git pull --rebase || true
 
-          python scripts/orchestrator.py claim "${{ steps.fase.outputs.fase }}"
-          claim_result=$?
+          # OJO: los pasos de GitHub Actions corren con "set -e", así que un
+          # comando suelto que termine con código de salida distinto de 0
+          # corta el paso ENTERO ahí mismo. Como acá el código 2 es "avisá
+          # que hay que saltear, no es un error", hay que capturarlo con
+          # "|| claim_result=$?" en vez de dejar que la línea corte sola.
+          claim_result=0
+          python scripts/orchestrator.py claim "${{ steps.fase.outputs.fase }}" || claim_result=$?
 
           if [ "$claim_result" = "2" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"

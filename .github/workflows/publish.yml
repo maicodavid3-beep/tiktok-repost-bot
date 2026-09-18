@@ -53,7 +53,45 @@ jobs:
             echo "fase=ciclo" >> "$GITHUB_OUTPUT"
           fi
 
+      # Antes de tocar YouTube o Instagram, cada corrida "reserva" su turno
+      # subiendo un cambio mínimo a Git. Si dos corridas arrancan casi al
+      # mismo tiempo (por ejemplo el cron nativo de GitHub y el respaldo de
+      # cron-job.org), solo una de las dos va a lograr pushear su reserva;
+      # la otra va a ser rechazada por Git y se cancela SIN haber publicado
+      # nada todavía. Esto es necesario porque el "concurrency" de abajo, en
+      # teoría, ya debería evitar corridas superpuestas, pero una vez falló
+      # en hacerlo y terminó publicando el mismo video dos veces.
+      - name: Reservar turno (evita corridas duplicadas/superpuestas)
+        id: reservar
+        run: |
+          git config user.name "repost-bot"
+          git config user.email "repost-bot@users.noreply.github.com"
+          git pull --rebase || true
+
+          python scripts/orchestrator.py claim "${{ steps.fase.outputs.fase }}"
+          claim_result=$?
+
+          if [ "$claim_result" = "2" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$claim_result" != "0" ]; then
+            echo "Error inesperado al reservar el turno (código $claim_result)."
+            exit 1
+          fi
+
+          git add state/last_run.json
+          git commit -m "Reserva turno (${{ steps.fase.outputs.fase }}) [skip ci]"
+
+          if git push; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No se pudo reservar el turno: probablemente otra corrida lo reservó casi al mismo tiempo. No hago nada más en esta corrida (así se evita publicar dos veces)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Ejecutar orquestador
+        if: steps.reservar.outputs.skip != 'true'
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
@@ -65,9 +103,30 @@ jobs:
         run: python scripts/orchestrator.py ${{ steps.fase.outputs.fase }}
 
       - name: Guardar estado actualizado (queue.json / pending_normal.json)
+        if: steps.reservar.outputs.skip != 'true'
         run: |
           git config user.name "repost-bot"
           git config user.email "repost-bot@users.noreply.github.com"
           git add config/queue.json state/pending_normal.json state/last_run.json
-          git diff --cached --quiet || git commit -m "Actualiza estado [skip ci]"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "Nada para guardar."
+            exit 0
+          fi
+
+          git commit -m "Actualiza estado [skip ci]"
+
+          # Si el push es rechazado (por ejemplo por otra corrida que también
+          # llegó a pushear algo mientras tanto), reintenta con pull --rebase
+          # en vez de perder el resultado de esta corrida (que ya publicó de
+          # verdad en YouTube/Instagram y hay que dejarlo registrado sí o sí).
+          for i in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rechazado, reintentando con pull --rebase (intento $i de 3)..."
+            git pull --rebase
+          done
+
+          echo "No se pudo guardar el estado final después de varios intentos."
+          exit 1

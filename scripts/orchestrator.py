@@ -299,9 +299,46 @@ def fase2() -> None:
     _mark_ran("fase2")
 
 
+def claim(key: str) -> None:
+    """Usado por el workflow de GitHub Actions para "reservar" el turno
+    ANTES de hacer ningún trabajo real (publicar en YouTube/Instagram).
+
+    Si esta clave (ciclo/fase1/fase2) ya se reservó/ejecutó hace menos de
+    RECENT_RUN_MINUTES, termina con código de salida 2 (le avisa al workflow
+    que tiene que saltear esta corrida) sin modificar nada. Si no, marca la
+    clave como "reservada ahora" en state/last_run.json y termina con
+    código 0; el workflow va a intentar commitear y pushear ese cambio de
+    inmediato, ANTES de tocar cualquier API real.
+
+    Por qué esto importa: el "concurrency" del workflow de GitHub Actions
+    debería evitar que dos corridas se ejecuten en paralelo, pero una vez
+    falló (dos corridas llegaron a ejecutar el orquestador completo al mismo
+    tiempo, y una publicó un video dos veces antes de que la segunda se
+    diera cuenta). Este chequeo no depende de que GitHub coordine bien las
+    corridas: usa el hecho de que Git solo deja que UNA de dos corridas que
+    intentan pushear casi al mismo tiempo tenga éxito (la otra es
+    rechazada). Si esta corrida pierde esa carrera, se cancela sola antes de
+    publicar nada, así nunca se llega a publicar el mismo video dos veces.
+    """
+    if _recently_ran(key):
+        print(
+            f"'{key}' ya se reservó/ejecutó hace menos de {RECENT_RUN_MINUTES} "
+            "minutos. Salteo esta corrida antes de hacer ningún trabajo real."
+        )
+        sys.exit(2)
+    _mark_ran(key)
+    print(f"Turno '{key}' reservado. Sigue el resto de la corrida.")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("ciclo", "fase1", "fase2"):
-        print("Uso: python orchestrator.py [ciclo|fase1|fase2]")
+    if len(sys.argv) < 2 or sys.argv[1] not in ("ciclo", "fase1", "fase2", "claim"):
+        print("Uso: python orchestrator.py [ciclo|fase1|fase2|claim <clave>]")
         sys.exit(1)
 
-    {"ciclo": ciclo, "fase1": fase1, "fase2": fase2}[sys.argv[1]]()
+    if sys.argv[1] == "claim":
+        if len(sys.argv) != 3:
+            print("Uso: python orchestrator.py claim [ciclo|fase1|fase2]")
+            sys.exit(1)
+        claim(sys.argv[2])
+    else:
+        {"ciclo": ciclo, "fase1": fase1, "fase2": fase2}[sys.argv[1]]()

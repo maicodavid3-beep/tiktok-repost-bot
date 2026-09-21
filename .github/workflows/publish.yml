@@ -40,7 +40,14 @@ jobs:
     # poco (ver orchestrator.py), cortar acá en el peor de los casos no
     # pierde ni duplica nada: lo que ya se publicó de verdad queda
     # registrado, y lo que falta lo retoma la corrida siguiente.
-    timeout-minutes: 45
+    #
+    # 90 minutos porque con varios videos acumulados esperando su Fase 2 (por
+    # ejemplo tras un corte real de un día), cada uno agrega 15 minutos de
+    # espera entre publicación y publicación (BACKLOG_GAP_SECONDS): con 4
+    # videos ya son 45 minutos solo de esperas, sin contar el trabajo real de
+    # cada publicación. 90 minutos deja margen para vaciar un backlog de
+    # varios videos en una sola corrida en vez de necesitar 2-3 horarios.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4

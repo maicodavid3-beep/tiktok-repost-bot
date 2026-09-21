@@ -225,6 +225,13 @@ def _do_fase2(force: bool = False) -> None:
     queue = _load_json(QUEUE_PATH)
     publicados = []
 
+    # "restantes" es lo que va a terminar en pending_normal.json: arranca
+    # con TODO lo que no se procesa en este for (los no_listos) más los
+    # listos que todavía no llegamos a publicar. A medida que cada uno se
+    # publica de verdad, lo sacamos de acá y guardamos enseguida (ver abajo)
+    # — NO esperamos a que termine todo el lote para guardar.
+    restantes = list(no_listos) + list(listos)
+
     # Procesamos TODOS los que ya estén listos (no solo el primero), por si
     # se acumuló más de uno (por ejemplo tras una corrida perdida). Si hay
     # más de uno, los espaciamos un poco entre sí.
@@ -232,6 +239,7 @@ def _do_fase2(force: bool = False) -> None:
         item = next((v for v in queue if v["id"] == pending["id"]), None)
         if item is None:
             print(f"Aviso: no se encontró en la cola el video {pending['id']}. Lo descarto de la lista de espera.")
+            restantes = [p for p in restantes if p["id"] != pending["id"]]
             continue
 
         if idx > 0:
@@ -245,9 +253,18 @@ def _do_fase2(force: bool = False) -> None:
         publicados.append(pending["id"])
         print(f"[Fase 2] Reel normal publicado para {pending['id']}.")
 
-    _save_json(QUEUE_PATH, queue)
-    # Los que todavía no cumplieron sus 24hs quedan esperando en la lista.
-    _save_json(PENDING_PATH, no_listos)
+        # IMPORTANTE: guardamos INMEDIATAMENTE después de cada publicación
+        # real, no recién al final del lote. Si el proceso se corta a mitad
+        # de un lote con varios videos pendientes (por ejemplo por el límite
+        # de tiempo del workflow, o cualquier otro corte), lo que ya se
+        # publicó de verdad queda registrado y la próxima corrida no lo
+        # vuelve a publicar. Guardar solo al final dejaba una ventana donde
+        # un corte a mitad de camino podía terminar duplicando una
+        # publicación real (el mismo tipo de problema del incidente 8, pero
+        # por otra causa).
+        restantes = [p for p in restantes if p["id"] != pending["id"]]
+        _save_json(QUEUE_PATH, queue)
+        _save_json(PENDING_PATH, restantes)
 
     if len(publicados) > 1:
         print(

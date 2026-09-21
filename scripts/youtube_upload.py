@@ -14,11 +14,21 @@ sin volver a pedir login.
 import os
 import sys
 
+import google_auth_httplib2
+import httplib2
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+# Sin esto, la librería de Google no le pone ningún límite de tiempo a las
+# conexiones de red: si una conexión se traba a mitad de subir el video (algo
+# que puede pasar, por ejemplo, por un problema de red pasajero del runner de
+# GitHub Actions), la subida se queda esperando PARA SIEMPRE, sin ningún
+# error ni aviso, y la corrida entera queda colgada. Con este timeout, una
+# conexión trabada corta con un error a los 2 minutos en vez de colgarse.
+HTTP_TIMEOUT_SECONDS = 120
 
 
 def get_youtube_client():
@@ -30,7 +40,10 @@ def get_youtube_client():
         token_uri="https://oauth2.googleapis.com/token",
         scopes=SCOPES,
     )
-    return build("youtube", "v3", credentials=creds)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_SECONDS)
+    )
+    return build("youtube", "v3", http=authorized_http)
 
 
 def upload_video(video_path: str, title: str, description: str, tags=None) -> str:
@@ -50,7 +63,12 @@ def upload_video(video_path: str, title: str, description: str, tags=None) -> st
         },
     }
 
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
+    # Subimos en pedazos de 8MB en vez de todo el archivo de una sola vez
+    # (chunksize=-1). Así, cada pedido de red individual es chico y termina
+    # rápido (el timeout de arriba cubre cada pedazo, no el archivo entero),
+    # y de paso vamos viendo el progreso real en el log en vez de silencio
+    # total hasta que termine todo.
+    media = MediaFileUpload(video_path, chunksize=8 * 1024 * 1024, resumable=True, mimetype="video/mp4")
 
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
 

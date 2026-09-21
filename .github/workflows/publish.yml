@@ -32,6 +32,15 @@ concurrency:
 jobs:
   publicar:
     runs-on: ubuntu-latest
+    # Límite máximo de toda la corrida. Si algo se traba (por ejemplo una
+    # conexión de red colgada) sin este límite, GitHub la dejaría corriendo
+    # hasta 6 horas por default, bloqueando además todas las corridas
+    # siguientes (por el "concurrency" de más abajo, que hace que esperen en
+    # cola en vez de correr en paralelo). Como el estado se guarda de a
+    # poco (ver orchestrator.py), cortar acá en el peor de los casos no
+    # pierde ni duplica nada: lo que ya se publicó de verdad queda
+    # registrado, y lo que falta lo retoma la corrida siguiente.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -115,6 +124,12 @@ jobs:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_BRANCH: main
+          # Sin esto, Python guarda la salida de los print() en un buffer y
+          # no la muestra en el log de GitHub Actions hasta que el proceso
+          # termina (o el buffer se llena). Con esto, cada línea aparece en
+          # el log apenas se imprime — clave para poder diagnosticar en vivo
+          # si una corrida se está demorando de más.
+          PYTHONUNBUFFERED: "1"
         run: python scripts/orchestrator.py ${{ steps.fase.outputs.fase }}
 
       - name: Guardar estado actualizado (queue.json / pending_normal.json)

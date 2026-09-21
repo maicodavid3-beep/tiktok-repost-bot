@@ -73,8 +73,18 @@ jobs:
           # corta el paso ENTERO ahí mismo. Como acá el código 2 es "avisá
           # que hay que saltear, no es un error", hay que capturarlo con
           # "|| claim_result=$?" en vez de dejar que la línea corte sola.
+          #
+          # IMPORTANTE: la clave que reservamos acá tiene que ser DISTINTA de
+          # "ciclo"/"fase1"/"fase2" a secas, porque el propio orchestrator.py
+          # también revisa esas mismas claves puertas adentro de ciclo()/
+          # fase1()/fase2() para su propio control de duplicados. Si
+          # usáramos la misma clave, la reserva quedaría marcada segundos
+          # antes de ejecutar el orquestador, y el orquestador se
+          # encontraría con su propia marca "recién puesta" y se frenaría
+          # solo sin publicar nada, siempre. Por eso acá usamos el prefijo
+          # "reserva-".
           claim_result=0
-          python scripts/orchestrator.py claim "${{ steps.fase.outputs.fase }}" || claim_result=$?
+          python scripts/orchestrator.py claim "reserva-${{ steps.fase.outputs.fase }}" || claim_result=$?
 
           if [ "$claim_result" = "2" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
